@@ -102,8 +102,7 @@
 // }
 
 
-
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 
 export default function VideoCall() {
   const localVideoRef = useRef();
@@ -111,28 +110,29 @@ export default function VideoCall() {
   const pc = useRef(null);
   const ws = useRef(null);
   const localStream = useRef(null);
-  const [hasRemote, setHasRemote] = useState(false);
 
   useEffect(() => {
     const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com";
     ws.current = new WebSocket(SIGNALING_SERVER_URL);
 
-    // Setup RTCPeerConnection
+    // --- Setup RTCPeerConnection ---
     pc.current = new RTCPeerConnection();
 
+    // Send ICE candidates to signaling
     pc.current.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("Sending candidate:", event.candidate);
         ws.current.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
       }
     };
 
+    // When remote stream arrives
     pc.current.ontrack = (event) => {
-      console.log("Remote stream received ✅");
+      console.log("✅ Remote stream received:", event.streams);
       remoteVideoRef.current.srcObject = event.streams[0];
-      setHasRemote(true);
     };
 
-    // Get local video
+    // --- Get local media (camera + mic) ---
     async function getMedia() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -144,48 +144,57 @@ export default function VideoCall() {
 
         stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
       } catch (err) {
-        console.error("Media error:", err);
+        console.error("❌ Media error:", err);
       }
     }
     getMedia();
 
-    // Create Offer
+    // --- Create Offer ---
     async function createOffer() {
+      console.log("📡 Creating offer...");
       const offer = await pc.current.createOffer();
       await pc.current.setLocalDescription(offer);
-      ws.current.send(JSON.stringify({ type: "offer", offer }));
+      ws.current.send(JSON.stringify({ type: "offer", offer: offer }));
     }
 
-    // Signaling events
+    // --- Handle WebSocket Signaling ---
     ws.current.onopen = () => {
-      console.log("Connected to signaling server");
+      console.log("Connected to signaling server ✅");
       ws.current.send(JSON.stringify({ type: "join" }));
     };
 
     ws.current.onmessage = async (message) => {
       const data = JSON.parse(message.data);
-      console.log("Received:", data);
+      console.log("📩 Received:", data);
 
       switch (data.type) {
-        case "ready":
+        case "ready": {
+          // Another client joined, make an offer
           createOffer();
           break;
-        case "offer":
-          await pc.current.setRemoteDescription(data.offer);
+        }
+        case "offer": {
+          console.log("📩 Got offer, sending answer...");
+          await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
           const answer = await pc.current.createAnswer();
           await pc.current.setLocalDescription(answer);
-          ws.current.send(JSON.stringify({ type: "answer", answer }));
+          ws.current.send(JSON.stringify({ type: "answer", answer: answer }));
           break;
-        case "answer":
-          await pc.current.setRemoteDescription(data.answer);
+        }
+        case "answer": {
+          console.log("📩 Got answer");
+          await pc.current.setRemoteDescription(new RTCSessionDescription(data.answer));
           break;
-        case "candidate":
+        }
+        case "candidate": {
+          console.log("📩 Got ICE candidate");
           try {
-            await pc.current.addIceCandidate(data.candidate);
+            await pc.current.addIceCandidate(new RTCIceCandidate(data.candidate));
           } catch (err) {
-            console.error("Error adding ICE candidate", err);
+            console.error("❌ Error adding ICE candidate:", err);
           }
           break;
+        }
         default:
           break;
       }
@@ -198,28 +207,38 @@ export default function VideoCall() {
         width: "100vw",
         height: "100vh",
         backgroundColor: "#000",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
+        position: "relative",
       }}
     >
-      {!hasRemote ? (
-        <video
-          ref={localVideoRef}
-          autoPlay
-          muted
-          playsInline
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      ) : (
-        <video
-          ref={remoteVideoRef}
-          autoPlay
-          playsInline
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      )}
+      {/* Remote video fullscreen */}
+      <video
+        ref={remoteVideoRef}
+        autoPlay
+        playsInline
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          background: "#222",
+        }}
+      />
+      {/* Local video small in corner */}
+      <video
+        ref={localVideoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{
+          width: "200px",
+          height: "150px",
+          position: "absolute",
+          bottom: "20px",
+          right: "20px",
+          border: "2px solid white",
+          borderRadius: "8px",
+          objectFit: "cover",
+        }}
+      />
     </div>
   );
 }
-
