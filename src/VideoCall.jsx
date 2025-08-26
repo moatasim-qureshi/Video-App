@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 export default function VideoCall() {
   const localVideoRef = useRef();
@@ -6,8 +6,10 @@ export default function VideoCall() {
   const pc = useRef(null);
   const ws = useRef(null);
 
+  const [hasRemote, setHasRemote] = useState(false);
+
   useEffect(() => {
-    const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com"; // later replace with deployed URL
+    const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com";
     ws.current = new WebSocket(SIGNALING_SERVER_URL);
 
     ws.current.onopen = () => {
@@ -44,7 +46,6 @@ export default function VideoCall() {
       }
     };
 
-    // Initialize peer connection
     pc.current = new RTCPeerConnection();
 
     pc.current.onicecandidate = (event) => {
@@ -56,10 +57,11 @@ export default function VideoCall() {
     };
 
     pc.current.ontrack = (event) => {
+      console.log("Remote stream received");
       remoteVideoRef.current.srcObject = event.streams[0];
+      setHasRemote(true); // Switch UI to remote
     };
 
-    // Get user media (auto-start)
     async function getMedia() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -83,20 +85,42 @@ export default function VideoCall() {
   }, []);
 
   return (
-    <div 
+    <div
       style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "20px",
         width: "100vw",
         height: "100vh",
         backgroundColor: "#000",
         overflow: "hidden",
       }}
     >
-      <video ref={localVideoRef} autoPlay muted playsInline className="w-1/3 border rounded" />
-      <video ref={remoteVideoRef} autoPlay playsInline className="w-1/3 border rounded" />
+      {/* Show local video if no remote is present */}
+      {!hasRemote && (
+        <video
+          ref={localVideoRef}
+          autoPlay
+          muted
+          playsInline
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      )}
+
+      {/* Show remote video once another client joins */}
+      {hasRemote && (
+        <video
+          ref={remoteVideoRef}
+          autoPlay
+          playsInline
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      )}
     </div>
   );
 }
