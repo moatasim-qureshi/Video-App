@@ -103,18 +103,60 @@
 
 
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 export default function VideoCall() {
-  const videoRef = useRef();
+  const localVideoRef = useRef();
+  const remoteVideoRef = useRef();
   const pc = useRef(null);
   const ws = useRef(null);
   const localStream = useRef(null);
+  const [hasRemote, setHasRemote] = useState(false);
 
   useEffect(() => {
     const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com";
     ws.current = new WebSocket(SIGNALING_SERVER_URL);
 
+    // Setup RTCPeerConnection
+    pc.current = new RTCPeerConnection();
+
+    pc.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.current.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+      }
+    };
+
+    pc.current.ontrack = (event) => {
+      console.log("Remote stream received ✅");
+      remoteVideoRef.current.srcObject = event.streams[0];
+      setHasRemote(true);
+    };
+
+    // Get local video
+    async function getMedia() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+        localStream.current = stream;
+        localVideoRef.current.srcObject = stream;
+
+        stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
+      } catch (err) {
+        console.error("Media error:", err);
+      }
+    }
+    getMedia();
+
+    // Create Offer
+    async function createOffer() {
+      const offer = await pc.current.createOffer();
+      await pc.current.setLocalDescription(offer);
+      ws.current.send(JSON.stringify({ type: "offer", offer }));
+    }
+
+    // Signaling events
     ws.current.onopen = () => {
       console.log("Connected to signaling server");
       ws.current.send(JSON.stringify({ type: "join" }));
@@ -148,46 +190,6 @@ export default function VideoCall() {
           break;
       }
     };
-
-    pc.current = new RTCPeerConnection();
-
-    pc.current.onicecandidate = (event) => {
-      if (event.candidate) {
-        ws.current.send(
-          JSON.stringify({ type: "candidate", candidate: event.candidate })
-        );
-      }
-    };
-
-    pc.current.ontrack = (event) => {
-      console.log("Remote stream received ✅");
-      // Replace local with remote when available
-      videoRef.current.srcObject = event.streams[0];
-    };
-
-    async function getMedia() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
-        localStream.current = stream;
-        videoRef.current.srcObject = stream; // show own video initially
-        stream.getTracks().forEach((track) =>
-          pc.current.addTrack(track, stream)
-        );
-      } catch (err) {
-        console.error("Media error:", err);
-      }
-    }
-
-    getMedia();
-
-    const createOffer = async () => {
-      const offer = await pc.current.createOffer();
-      await pc.current.setLocalDescription(offer);
-      ws.current.send(JSON.stringify({ type: "offer", offer }));
-    };
   }, []);
 
   return (
@@ -196,20 +198,28 @@ export default function VideoCall() {
         width: "100vw",
         height: "100vh",
         backgroundColor: "#000",
-        overflow: "hidden",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
       }}
     >
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-        }}
-      />
+      {!hasRemote ? (
+        <video
+          ref={localVideoRef}
+          autoPlay
+          muted
+          playsInline
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <video
+          ref={remoteVideoRef}
+          autoPlay
+          playsInline
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      )}
     </div>
   );
 }
+
