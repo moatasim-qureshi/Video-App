@@ -111,6 +111,9 @@ export default function VideoCall() {
   const ws = useRef(null);
   const localStream = useRef(null);
 
+  // We'll assign polite/impolite randomly based on join order
+  let polite = false;
+
   useEffect(() => {
     const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com";
     ws.current = new WebSocket(SIGNALING_SERVER_URL);
@@ -121,8 +124,9 @@ export default function VideoCall() {
     // Send ICE candidates to signaling
     pc.current.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("Sending candidate:", event.candidate);
-        ws.current.send(JSON.stringify({ type: "candidate", candidate: event.candidate }));
+        ws.current.send(
+          JSON.stringify({ type: "candidate", candidate: event.candidate })
+        );
       }
     };
 
@@ -132,7 +136,7 @@ export default function VideoCall() {
       remoteVideoRef.current.srcObject = event.streams[0];
     };
 
-    // --- Get local media (camera + mic) ---
+    // --- Get local media ---
     async function getMedia() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -142,7 +146,9 @@ export default function VideoCall() {
         localStream.current = stream;
         localVideoRef.current.srcObject = stream;
 
-        stream.getTracks().forEach((track) => pc.current.addTrack(track, stream));
+        stream
+          .getTracks()
+          .forEach((track) => pc.current.addTrack(track, stream));
       } catch (err) {
         console.error("❌ Media error:", err);
       }
@@ -151,13 +157,27 @@ export default function VideoCall() {
 
     // --- Create Offer ---
     async function createOffer() {
-      console.log("📡 Creating offer...");
-      const offer = await pc.current.createOffer();
-      await pc.current.setLocalDescription(offer);
-      ws.current.send(JSON.stringify({ type: "offer", offer: offer }));
+      try {
+        const offer = await pc.current.createOffer();
+        if (pc.current.signalingState !== "stable") return; // guard
+        await pc.current.setLocalDescription(offer);
+        ws.current.send(JSON.stringify({ type: "offer", offer: offer }));
+      } catch (err) {
+        console.error("Offer error:", err);
+      }
     }
 
-    // --- Handle WebSocket Signaling ---
+    // --- Handle negotiationneeded ---
+    pc.current.onnegotiationneeded = async () => {
+      console.log("⚡ Negotiation needed...");
+      try {
+        await createOffer();
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // --- WebSocket Signaling ---
     ws.current.onopen = () => {
       console.log("Connected to signaling server ✅");
       ws.current.send(JSON.stringify({ type: "join" }));
@@ -167,36 +187,79 @@ export default function VideoCall() {
       const data = JSON.parse(message.data);
       console.log("📩 Received:", data);
 
-      switch (data.type) {
-        case "ready": {
-          // Another client joined, make an offer
-          createOffer();
-          break;
-        }
-        case "offer": {
-          console.log("📩 Got offer, sending answer...");
-          await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-          const answer = await pc.current.createAnswer();
-          await pc.current.setLocalDescription(answer);
-          ws.current.send(JSON.stringify({ type: "answer", answer: answer }));
-          break;
-        }
-        case "answer": {
-          console.log("📩 Got answer");
-          await pc.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-          break;
-        }
-        case "candidate": {
-          console.log("📩 Got ICE candidate");
-          try {
-            await pc.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (err) {
-            console.error("❌ Error adding ICE candidate:", err);
+      try {
+        switch (data.type) {
+          case "ready":
+            // decide if polite or impolite
+            // first peer = impolite, second peer = polite
+            polite = true;
+            break;
+
+          case "offer": {
+            const offerCollision =
+              pc.current.signalingState !== "stable" || makingOffer;
+
+            if (offerCollision && !polite) {
+              console.warn("❌ Ignoring offer due to collision (impolite)");
+              return;
+            }
+
+            console.log("📩 Applying remote offer...");
+            await pc.current.setRemoteDescription(
+              new RTCSessionDescription(data.offer)
+            );
+            const answer = await pc.current.createAnswer();
+            await pc.current.setLocalDescription(answer);
+            ws.current.send(
+              JSON.stringify({ type: "answer", answer: answer })
+            );
+            break;
           }
-          break;
+
+          case "answer": {
+            console.log("📩 Applying remote answer...");
+            await pc.current.setRemoteDescription(
+              new RTCSessionDescription(data.answer)
+            );
+            break;
+          }
+
+          case "candidate": {
+            try {
+              await pc.current.addIceCandidate(
+                new RTCIceCandidate(data.candidate)
+              );
+            } catch (err) {
+              if (!pc.current.remoteDescription) {
+                console.warn("⚠️ Candidate ignored, no remoteDescription yet");
+              } else {
+                console.error("❌ Error adding ICE candidate:", err);
+              }
+            }
+            break;
+          }
+
+          default:
+            break;
         }
-        default:
-          break;
+      } catch (err) {
+        console.error("Signaling error:", err);
+      }
+    };
+
+    let makingOffer = false;
+
+    // wrap negotiation events
+    pc.current.onnegotiationneeded = async () => {
+      try {
+        makingOffer = true;
+        const offer = await pc.current.createOffer();
+        await pc.current.setLocalDescription(offer);
+        ws.current.send(JSON.stringify({ type: "offer", offer }));
+      } catch (err) {
+        console.error("Negotiation error:", err);
+      } finally {
+        makingOffer = false;
       }
     };
   }, []);
