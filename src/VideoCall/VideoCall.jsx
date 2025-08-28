@@ -272,7 +272,7 @@ export default function VideoCall() {
   const room = params.get("room") || "default";
 
   useEffect(() => {
-    const SIGNALING_SERVER_URL = "ws://localhost:5000"; // use wss:// if deployed on HTTPS
+    const SIGNALING_SERVER_URL = "https://video-app-backend-8172.onrender.com"; // use wss:// if deployed on HTTPS
     ws.current = new WebSocket(SIGNALING_SERVER_URL);
 
     // --- WebRTC peer connection ---
