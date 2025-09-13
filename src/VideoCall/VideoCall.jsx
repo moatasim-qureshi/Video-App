@@ -605,17 +605,22 @@ export default function VideoCall({ city, code }) {
   const sendTransportRef = useRef(null);
   const recvTransportRef = useRef(null);
 
+  // ✅ fixed helper: avoids duplicate tracks & groups audio+video
   function addTrackToProducerStream(producerId, track) {
     setRemoteVideos((prev) => {
-      const copy = [...prev];
-      const idx = copy.findIndex((p) => p.producerId === producerId);
-      if (idx >= 0) {
-        copy[idx].stream.addTrack(track);
+      const existing = prev.find((p) => p.producerId === producerId);
+      if (existing) {
+        const stream = existing.stream;
+        if (!stream.getTracks().some((t) => t.id === track.id)) {
+          stream.addTrack(track);
+        }
+        return prev.map((p) =>
+          p.producerId === producerId ? { ...p, stream } : p
+        );
       } else {
         const stream = new MediaStream([track]);
-        copy.push({ producerId, stream });
+        return [...prev, { producerId, stream }];
       }
-      return copy;
     });
   }
 
@@ -729,7 +734,6 @@ export default function VideoCall({ city, code }) {
           try {
             const { id, rtpParameters, kind } = await new Promise((res) =>
               socket.emit(
-                "consume",
                 {
                   producerId,
                   rtpCapabilities: device.rtpCapabilities,
@@ -764,7 +768,11 @@ export default function VideoCall({ city, code }) {
         });
 
         const existing = await new Promise((res) =>
-          socket.emit("listProducers", { city: city ?? null, code: code ?? null }, res)
+          socket.emit(
+            "listProducers",
+            { city: city ?? null, code: code ?? null },
+            res
+          )
         );
         if (Array.isArray(existing)) {
           for (const p of existing) {
@@ -800,23 +808,26 @@ export default function VideoCall({ city, code }) {
 
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden">
-      {/* Remote video full screen if exists */}
+      {/* Remote videos */}
       <AnimatePresence>
-        {hasRemote &&
-          remoteVideos.map((v) => (
-            <motion.video
-              key={v.producerId}
-              autoPlay
-              playsInline
-              className="absolute top-0 left-0 w-full h-full object-cover"
-              ref={(el) => {
-                if (el) el.srcObject = v.stream;
-              }}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            />
-          ))}
+        {remoteVideos.map((v, idx) => (
+          <motion.video
+            key={v.producerId}
+            autoPlay
+            playsInline
+            className={`absolute object-cover ${
+              idx === 0
+                ? "top-0 left-0 w-full h-full" // first remote fullscreen
+                : `bottom-${idx * 4} right-${idx * 4} w-40 h-28 rounded-lg border-2 border-white` // stacked thumbnails
+            }`}
+            ref={(el) => {
+              if (el) el.srcObject = v.stream;
+            }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          />
+        ))}
       </AnimatePresence>
 
       {/* Local video */}
@@ -825,7 +836,7 @@ export default function VideoCall({ city, code }) {
         autoPlay
         muted
         playsInline
-        className={`absolute rounded-xl shadow-lg border-2 border-green-400 ${
+        className={`absolute rounded-xl shadow-lg border-2 border-green-400 transition-all ${
           hasRemote
             ? "bottom-4 right-4 w-40 h-28 object-cover"
             : "top-0 left-0 w-full h-full object-cover"
