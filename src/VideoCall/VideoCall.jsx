@@ -331,50 +331,508 @@
 // }
 // -------------------------------------------------------------------
 
-import React, { useEffect, useRef } from "react";
-import { ZegoUIKitPrebuilt } from "@zegocloud/zego-uikit-prebuilt";
+// import React, { useEffect, useRef } from "react";
+// import { ZegoUIKitPrebuilt } from "@zegocloud/zego-uikit-prebuilt";
 
-export default function VideoCall() {
-  const meetingRef = useRef(null);
+// export default function VideoCall() {
+//   const meetingRef = useRef(null);
+
+//   useEffect(() => {
+//     const appID = 1516433132; 
+//     const serverSecret = "4486740846df91f03d0d7fdd1a84143a"; 
+//     const roomID = new URLSearchParams(window.location.search).get("room") || "default";
+//     const userID = String(Math.floor(Math.random() * 10000));
+//     const userName = "User_" + userID;
+
+//     const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
+//       appID,
+//       serverSecret,
+//       roomID,
+//       userID,
+//       userName
+//     );
+
+//     // Create instance
+//     const zp = ZegoUIKitPrebuilt.create(kitToken);
+
+//     // join room with custom UI
+//     zp.joinRoom({
+//       container: meetingRef.current,
+//       scenario: {
+//         mode: ZegoUIKitPrebuilt.OneONoneCall,
+//       },
+//       showPreJoinView: false, 
+//     });
+//   }, []);
+
+//   return (
+//     <div
+//       ref={meetingRef}
+//       style={{
+//         width: "100vw",
+//         height: "100vh",
+//         background: "#000",
+//         position: "relative",
+//       }}
+//     />
+//   );
+// }
+
+// ------------------------------------------------------------------------------------
+
+// src/VideoCall.js
+// import React, { useEffect, useRef, useState } from "react";
+// import io from "socket.io-client";
+// import * as mediasoupClient from "mediasoup-client";
+
+// const SERVER_URL = "https://deborah-latex-required-minor.trycloudflare.com";
+
+// export default function VideoCall({ city, code }) {
+//   const localVideoRef = useRef(null);
+//   const [remoteVideos, setRemoteVideos] = useState([]); // [{ producerId, stream }]
+//   const deviceRef = useRef(null);
+//   const socketRef = useRef(null);
+//   const sendTransportRef = useRef(null);
+//   const recvTransportRef = useRef(null);
+
+//   // helper to add/append track to proper stream (one stream per producer)
+//   function addTrackToProducerStream(producerId, track) {
+//     setRemoteVideos((prev) => {
+//       const copy = prev.slice();
+//       const idx = copy.findIndex((p) => p.producerId === producerId);
+//       if (idx >= 0) {
+//         // append track to existing MediaStream
+//         copy[idx].stream.addTrack(track);
+//       } else {
+//         // create new MediaStream for that producer
+//         const stream = new MediaStream([track]);
+//         copy.push({ producerId, stream });
+//       }
+//       return copy;
+//     });
+//   }
+
+//   useEffect(() => {
+//     let mounted = true;
+
+//     const socket = io(SERVER_URL, { transports: ["websocket"] });
+//     socketRef.current = socket;
+
+//     async function init() {
+//       try {
+//         // 1. get rtp capabilities
+//         const rtpCapabilities = await new Promise((res) => socket.emit("getRtpCapabilities", res));
+//         if (!mounted) return;
+
+//         // 2. create device
+//         const device = new mediasoupClient.Device();
+//         await device.load({ routerRtpCapabilities: rtpCapabilities });
+//         deviceRef.current = device;
+
+//         // 3. get local stream
+//         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+//         if (!mounted) {
+//           stream.getTracks().forEach((t) => t.stop());
+//           return;
+//         }
+//         localVideoRef.current.srcObject = stream;
+
+//         // 4. create send transport
+//         const sendTransportParams = await new Promise((res) => socket.emit("createTransport", res));
+//         sendTransportRef.current = device.createSendTransport(sendTransportParams);
+
+//         sendTransportRef.current.on("connect", ({ dtlsParameters }, callback, errback) => {
+//           socket.emit("connectTransport", { transportId: sendTransportParams.id, dtlsParameters }, (resp) => {
+//             if (resp?.error) errback(new Error(resp.error));
+//             else callback();
+//           });
+//         });
+
+//         // When mediasoup-client emits "produce", it gives us rtpParameters — send them to server
+//         sendTransportRef.current.on("produce", ({ kind, rtpParameters }, callback, errback) => {
+//           socket.emit(
+//             "produce",
+//             {
+//               transportId: sendTransportParams.id,
+//               kind,
+//               rtpParameters,
+//               city: city ?? null,
+//               code: code ?? null,
+//             },
+//             ({ id, error }) => {
+//               if (error) errback(new Error(error));
+//               else callback({ id });
+//             }
+//           );
+//         });
+
+//         // 5. produce local tracks (let mediasoup-client create rtp params)
+//         const audioTrack = stream.getAudioTracks()[0];
+//         if (audioTrack) {
+//           await sendTransportRef.current.produce({ track: audioTrack, appData: { mediaTag: "audio" } });
+//           console.log("✅ Audio producer created");
+//         }
+
+//         const videoTrack = stream.getVideoTracks()[0];
+//         if (videoTrack) {
+//           await sendTransportRef.current.produce({ track: videoTrack, appData: { mediaTag: "video" } });
+//           console.log("✅ Video producer created");
+//         }
+
+//         // 6. create recv transport
+//         const recvTransportParams = await new Promise((res) => socket.emit("createTransport", res));
+//         recvTransportRef.current = device.createRecvTransport(recvTransportParams);
+
+//         recvTransportRef.current.on("connect", ({ dtlsParameters }, callback, errback) => {
+//           socket.emit("connectTransport", { transportId: recvTransportParams.id, dtlsParameters }, (resp) => {
+//             if (resp?.error) errback(new Error(resp.error));
+//             else callback();
+//           });
+//         });
+
+//         // consumer helper: consumes a producerId and attaches track to the right stream
+//         async function consumeProducer(producerId) {
+//           try {
+//             const { id, rtpParameters, kind } = await new Promise((res) =>
+//               socket.emit("consume", { producerId, rtpCapabilities: device.rtpCapabilities, transportId: recvTransportParams.id }, res)
+//             );
+
+//             const consumer = await recvTransportRef.current.consume({ id, producerId, kind, rtpParameters });
+//             // resume on server side
+//             socket.emit("resumeConsumer", { consumerId: consumer.id }, () => {});
+
+//             // attach track to per-producer stream
+//             addTrackToProducerStream(producerId, consumer.track);
+
+//             // handle consumer close / track end
+//             consumer.on("transportclose", () => {
+//               console.log("consumer transport closed", consumer.id);
+//             });
+//             consumer.on("producerclose", () => {
+//               console.log("producer closed:", producerId);
+//               // remove producer's stream from state
+//               setRemoteVideos((prev) => prev.filter((p) => p.producerId !== producerId));
+//             });
+//           } catch (err) {
+//             console.error("consumeProducer error:", err);
+//           }
+//         }
+
+//         // 7a. listen for new producers
+//         socket.on("newProducer", async ({ producerId, kind, city: pcity }) => {
+//           console.log("📡 newProducer event:", producerId, kind, pcity);
+//           await consumeProducer(producerId);
+//         });
+
+//         // 7b. request existing producers at join (important)
+//         const existing = await new Promise((res) => socket.emit("listProducers", { city: city ?? null, code: code ?? null }, res));
+//         if (Array.isArray(existing)) {
+//           for (const p of existing) {
+//             // p.producerId
+//             await consumeProducer(p.producerId);
+//           }
+//         } else {
+//           console.log("listProducers returned:", existing);
+//         }
+//       } catch (err) {
+//         console.error("init error:", err);
+//       }
+//     }
+
+//     init();
+
+//     return () => {
+//       mounted = false;
+//       try {
+//         socket.disconnect();
+//       } catch {}
+//       try {
+//         sendTransportRef.current?.close();
+//         recvTransportRef.current?.close();
+//       } catch {}
+//       // stop local tracks
+//       if (localVideoRef.current?.srcObject) {
+//         localVideoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+//       }
+//       // clear remote streams
+//       setRemoteVideos([]);
+//     };
+//   }, [city, code]);
+
+//   return (
+//     <div>
+//       <h2>Video Call ({city ?? "—"})</h2>
+//       <video
+//         ref={localVideoRef}
+//         autoPlay
+//         muted
+//         playsInline
+//         style={{ width: "300px", border: "2px solid green" }}
+//       />
+//       <div>
+//         {remoteVideos.map((v) => (
+//           <video
+//             key={v.producerId}
+//             autoPlay
+//             playsInline
+//             style={{ position: "relative", background: "#000", height: "300px", width: "400px", transform: "scaleX(-1)" }}
+//             ref={(el) => {
+//               if (el) el.srcObject = v.stream;
+//             }}
+//           />
+//         ))}
+//       </div>
+//     </div>
+//   );
+// }
+
+
+// -------------------------------------------------------------------
+
+// src/VideoCall.js
+import React, { useEffect, useRef, useState } from "react";
+import io from "socket.io-client";
+import * as mediasoupClient from "mediasoup-client";
+import { motion, AnimatePresence } from "framer-motion";
+
+const SERVER_URL = "https://deborah-latex-required-minor.trycloudflare.com";
+
+export default function VideoCall({ city, code }) {
+  const localVideoRef = useRef(null);
+  const [remoteVideos, setRemoteVideos] = useState([]); // [{ producerId, stream }]
+  const deviceRef = useRef(null);
+  const socketRef = useRef(null);
+  const sendTransportRef = useRef(null);
+  const recvTransportRef = useRef(null);
+
+  function addTrackToProducerStream(producerId, track) {
+    setRemoteVideos((prev) => {
+      const copy = [...prev];
+      const idx = copy.findIndex((p) => p.producerId === producerId);
+      if (idx >= 0) {
+        copy[idx].stream.addTrack(track);
+      } else {
+        const stream = new MediaStream([track]);
+        copy.push({ producerId, stream });
+      }
+      return copy;
+    });
+  }
 
   useEffect(() => {
-    const appID = 1516433132; // 👈 replace with ZegoCloud AppID
-    const serverSecret = "4486740846df91f03d0d7fdd1a84143a"; // 👈 replace with your ServerSecret
-    const roomID = new URLSearchParams(window.location.search).get("room") || "default";
-    const userID = String(Math.floor(Math.random() * 10000));
-    const userName = "User_" + userID;
+    let mounted = true;
+    const socket = io(SERVER_URL, { transports: ["websocket"] });
+    socketRef.current = socket;
 
-    // quick test token (not secure, for dev only)
-    const kitToken = ZegoUIKitPrebuilt.generateKitTokenForTest(
-      appID,
-      serverSecret,
-      roomID,
-      userID,
-      userName
-    );
+    async function init() {
+      try {
+        const rtpCapabilities = await new Promise((res) =>
+          socket.emit("getRtpCapabilities", res)
+        );
+        if (!mounted) return;
 
-    // Create instance
-    const zp = ZegoUIKitPrebuilt.create(kitToken);
+        const device = new mediasoupClient.Device();
+        await device.load({ routerRtpCapabilities: rtpCapabilities });
+        deviceRef.current = device;
 
-    // join room with custom UI
-    zp.joinRoom({
-      container: meetingRef.current,
-      scenario: {
-        mode: ZegoUIKitPrebuilt.OneONoneCall, // 👈 like your code: 1-to-1
-      },
-      showPreJoinView: false, // skip preview, go straight in
-    });
-  }, []);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+        if (!mounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        localVideoRef.current.srcObject = stream;
+
+        const sendTransportParams = await new Promise((res) =>
+          socket.emit("createTransport", res)
+        );
+        sendTransportRef.current = device.createSendTransport(
+          sendTransportParams
+        );
+
+        sendTransportRef.current.on(
+          "connect",
+          ({ dtlsParameters }, callback, errback) => {
+            socket.emit(
+              "connectTransport",
+              { transportId: sendTransportParams.id, dtlsParameters },
+              (resp) => {
+                if (resp?.error) errback(new Error(resp.error));
+                else callback();
+              }
+            );
+          }
+        );
+
+        sendTransportRef.current.on(
+          "produce",
+          ({ kind, rtpParameters }, callback, errback) => {
+            socket.emit(
+              "produce",
+              {
+                transportId: sendTransportParams.id,
+                kind,
+                rtpParameters,
+                city: city ?? null,
+                code: code ?? null,
+              },
+              ({ id, error }) => {
+                if (error) errback(new Error(error));
+                else callback({ id });
+              }
+            );
+          }
+        );
+
+        const audioTrack = stream.getAudioTracks()[0];
+        if (audioTrack) {
+          await sendTransportRef.current.produce({
+            track: audioTrack,
+            appData: { mediaTag: "audio" },
+          });
+          console.log("✅ Audio producer created");
+        }
+
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          await sendTransportRef.current.produce({
+            track: videoTrack,
+            appData: { mediaTag: "video" },
+          });
+          console.log("✅ Video producer created");
+        }
+
+        const recvTransportParams = await new Promise((res) =>
+          socket.emit("createTransport", res)
+        );
+        recvTransportRef.current = device.createRecvTransport(
+          recvTransportParams
+        );
+
+        recvTransportRef.current.on(
+          "connect",
+          ({ dtlsParameters }, callback, errback) => {
+            socket.emit(
+              "connectTransport",
+              { transportId: recvTransportParams.id, dtlsParameters },
+              (resp) => {
+                if (resp?.error) errback(new Error(resp.error));
+                else callback();
+              }
+            );
+          }
+        );
+
+        async function consumeProducer(producerId) {
+          try {
+            const { id, rtpParameters, kind } = await new Promise((res) =>
+              socket.emit(
+                "consume",
+                {
+                  producerId,
+                  rtpCapabilities: device.rtpCapabilities,
+                  transportId: recvTransportParams.id,
+                },
+                res
+              )
+            );
+
+            const consumer = await recvTransportRef.current.consume({
+              id,
+              producerId,
+              kind,
+              rtpParameters,
+            });
+            socket.emit("resumeConsumer", { consumerId: consumer.id }, () => {});
+
+            addTrackToProducerStream(producerId, consumer.track);
+
+            consumer.on("producerclose", () => {
+              setRemoteVideos((prev) =>
+                prev.filter((p) => p.producerId !== producerId)
+              );
+            });
+          } catch (err) {
+            console.error("consumeProducer error:", err);
+          }
+        }
+
+        socket.on("newProducer", async ({ producerId }) => {
+          await consumeProducer(producerId);
+        });
+
+        const existing = await new Promise((res) =>
+          socket.emit("listProducers", { city: city ?? null, code: code ?? null }, res)
+        );
+        if (Array.isArray(existing)) {
+          for (const p of existing) {
+            await consumeProducer(p.producerId);
+          }
+        }
+      } catch (err) {
+        console.error("init error:", err);
+      }
+    }
+
+    init();
+
+    return () => {
+      mounted = false;
+      try {
+        socket.disconnect();
+      } catch {}
+      try {
+        sendTransportRef.current?.close();
+        recvTransportRef.current?.close();
+      } catch {}
+      if (localVideoRef.current?.srcObject) {
+        localVideoRef.current.srcObject
+          .getTracks()
+          .forEach((t) => t.stop());
+      }
+      setRemoteVideos([]);
+    };
+  }, [city, code]);
+
+  const hasRemote = remoteVideos.length > 0;
 
   return (
-    <div
-      ref={meetingRef}
-      style={{
-        width: "100vw",
-        height: "100vh",
-        background: "#000",
-        position: "relative",
-      }}
-    />
+    <div className="relative w-screen h-screen bg-black overflow-hidden">
+      {/* Remote video full screen if exists */}
+      <AnimatePresence>
+        {hasRemote &&
+          remoteVideos.map((v) => (
+            <motion.video
+              key={v.producerId}
+              autoPlay
+              playsInline
+              className="absolute top-0 left-0 w-full h-full object-cover"
+              ref={(el) => {
+                if (el) el.srcObject = v.stream;
+              }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            />
+          ))}
+      </AnimatePresence>
+
+      {/* Local video */}
+      <motion.video
+        ref={localVideoRef}
+        autoPlay
+        muted
+        playsInline
+        className={`absolute rounded-xl shadow-lg border-2 border-green-400 ${
+          hasRemote
+            ? "bottom-4 right-4 w-40 h-28 object-cover"
+            : "top-0 left-0 w-full h-full object-cover"
+        }`}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+      />
+    </div>
   );
 }
